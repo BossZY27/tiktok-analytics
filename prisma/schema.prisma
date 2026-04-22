@@ -1,0 +1,86 @@
+// ============================================
+// Prisma Schema สำหรับ TikTok Analytics Dashboard
+// รองรับระบบสิทธิ์ (RBAC) และหลายบัญชี TikTok
+// ============================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// === Enum สำหรับกำหนดสิทธิ์ผู้ใช้ ===
+enum Role {
+  ADMIN   // ดู + แก้ไข + ลบ + จัดการ users
+  EDITOR  // ดู + แก้ไขข้อมูลที่ได้รับมอบหมาย
+  VIEWER  // ดูอย่างเดียว
+}
+
+// === ตาราง User: เก็บข้อมูลผู้ใช้ระบบ ===
+model User {
+  id             String          @id @default(cuid())
+  email          String          @unique
+  name           String?
+  password       String          // เก็บแบบ hash (bcrypt)
+  image          String?
+  role           Role            @default(VIEWER)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  // ความสัมพันธ์: User มีได้หลาย TikTok accounts
+  tiktokAccounts TikTokAccount[]
+
+  // (เตรียมไว้สำหรับ Google Login ในอนาคต)
+  // accounts       Account[]
+  // sessions       Session[]
+}
+
+// === ตาราง TikTokAccount: เก็บข้อมูลบัญชี TikTok ===
+model TikTokAccount {
+  id          String        @id @default(cuid())
+  userId      String
+  handle      String        // ชื่อบัญชี เช่น @username
+  displayName String?       // ชื่อแสดงผล
+  avatarUrl   String?       // รูปโปรไฟล์
+  accessToken String?       // Token สำหรับเชื่อมต่อ TikTok API (หากมี)
+  isManual    Boolean       @default(false) // ระบุว่าเป็นบัญชีที่สร้างเอง ไม่ได้ผ่าน OAuth
+  isActive    Boolean       @default(true)
+  lastSyncAt   DateTime?    // เวลาที่ Sync ล่าสุด
+  syncStatus   String?      // สถานะล่าสุด (e.g., 'SUCCESS', 'FAILED')
+  lastSyncRows Int?         @default(0) // จำนวนแถวที่นำเข้าล่าสุด
+  deletedAt   DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  browserProfile String      @default("Default") // ชื่อโปรไฟล์เบราว์เซอร์ (เช่น Default, Profile 1)
+
+  // ความสัมพันธ์
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dailyMetrics DailyMetric[]
+
+  @@index([userId])
+}
+
+// === ตาราง DailyMetric: เก็บสถิติรายวันของแต่ละบัญชี ===
+model DailyMetric {
+  id        String   @id @default(cuid())
+  accountId String
+  date      DateTime @db.Date
+  revenue   Float    @default(0) // รายได้ (บาท)
+  views     Int      @default(0) // ยอดวิว
+  likes     Int      @default(0) // ยอดไลค์
+  comments  Int      @default(0) // ยอดคอมเมนต์
+  shares        Int      @default(0) // ยอดแชร์
+  profileViews  Int      @default(0) // จำนวนการเข้าชมโปรไฟล์ (จากไฟล์นำเข้า)
+  followers Int      @default(0) // จำนวนผู้ติดตาม ณ วันนั้น
+  createdAt DateTime @default(now())
+
+  // ความสัมพันธ์
+  account TikTokAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  // ป้องกันข้อมูลซ้ำ: 1 บัญชี ต่อ 1 วัน
+  @@unique([accountId, date])
+  @@index([accountId])
+  @@index([date])
+}
