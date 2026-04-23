@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
 
     if (mode === "EXISTING" && accountId !== "NEW") {
       // 1. ดึงข้อมูลบัญชีเดิม
-      const account = await prisma.tiktokAccount.findUnique({
+      const account = await prisma.tikTokAccount.findUnique({
         where: { id: accountId },
       });
 
