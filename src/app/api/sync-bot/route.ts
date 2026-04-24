@@ -67,70 +67,74 @@ export async function POST(request: NextRequest) {
     const data = result.data as any[];
 
     console.log(`Bot importing ${data.length} rows for ${accountHandle}`);
-
-    let importCount = 0;
-
-    for (const row of data) {
-      const rawDate = row["Date"] || row["date"] || row["วันที่"];
-      if (!rawDate) continue;
-
-      // แปลงวันที่ (รองรับรูปวันที่ใน TikTok Studio CSV)
-      let finalDate: Date;
-      if (typeof rawDate === "number") {
-          finalDate = new Date(Math.round((rawDate - 25569) * 86400 * 1000));
-      } else {
-          // กรณี "April 12" -> "April 12 2024"
-          const dateStr = rawDate.includes(String(year)) ? rawDate : `${rawDate} ${year}`;
-          finalDate = new Date(dateStr);
-      }
-
-      if (isNaN(finalDate.getTime())) continue;
-
-      // ดึงค่าสถิติ
-      const views = parseInt(row["Video Views"] || row["views"] || row["0"], 10) || 0;
-      const profileViews = parseInt(row["Profile Views"] || row["profile_views"] || row["0"], 10) || 0;
-      const likes = parseInt(row["Likes"] || row["likes"] || row["0"], 10) || 0;
-      const comments = parseInt(row["Comments"] || row["comments"] || row["0"], 10) || 0;
-      const shares = parseInt(row["Shares"] || row["shares"] || row["0"], 10) || 0;
-
-      // บันทึกลงฐานข้อมูลแบบ Upsert
-      await prisma.dailyMetric.upsert({
-        where: {
-          accountId_date: {
-            accountId: account.id,
-            date: finalDate,
-          }
-        },
-        update: { views, profileViews, likes, comments, shares },
-        create: {
-          accountId: account.id,
-          date: finalDate,
-          views,
-          profileViews,
-          likes,
-          comments,
-          shares,
-        }
-      });
-      importCount++;
+    if (data.length > 0) {
+      console.log("🔍 Sample CSV Row:", data[0]);
     }
 
-    // 5. อัปเดตสถานะการ Sync ลงในบัญชี TikTok (ใช้ Raw SQL เพื่อบายพาสปัญหา Cache ของ Prisma Client)
-    try {
-      await prisma.$executeRaw`
-        UPDATE "TikTokAccount" 
-        SET "lastSyncAt" = ${new Date()}, 
-            "syncStatus" = 'SUCCESS', 
-            "lastSyncRows" = ${importCount} 
-        WHERE "id" = ${account.id}
-      `;
-    } catch (dbError) {
-      console.warn("Could not update sync status metadata:", dbError);
+    let importCount = 0;
+    let lastError = "";
+
+    for (const row of data) {
+      try {
+        const rawDate = row["Date"] || row["date"] || row["วันที่"];
+        if (!rawDate) continue;
+
+        // แปลงวันที่ (รองรับทั้ง April 16 และ 2026-04-16)
+        let finalDate: Date;
+        const cleanDateStr = String(rawDate).trim();
+        
+        if (typeof rawDate === "number") {
+            finalDate = new Date(Math.round((rawDate - 25569) * 86400 * 1000));
+        } else {
+            const dateWithYear = cleanDateStr.includes(String(year)) ? cleanDateStr : `${cleanDateStr} ${year}`;
+            finalDate = new Date(dateWithYear);
+        }
+
+        if (isNaN(finalDate.getTime())) continue;
+
+        // ทำความสะอาดตัวเลข
+        const clean = (v: any) => {
+          if (typeof v === "string") return parseFloat(v.replace(/[^0-9.]/g, "")) || 0;
+          return parseFloat(v) || 0;
+        };
+
+        const views = clean(row["Video Views"] || row["views"]);
+        const profileViews = clean(row["Profile Views"] || row["profile_views"]);
+        const likes = clean(row["Likes"] || row["likes"]);
+        const comments = clean(row["Comments"] || row["comments"]);
+        const shares = clean(row["Shares"] || row["shares"]);
+        const revenue = clean(row["Estimated earnings"] || row["earnings"]);
+
+        await prisma.dailyMetric.upsert({
+          where: {
+            accountId_date: {
+              accountId: account.id,
+              date: finalDate,
+            }
+          },
+          update: { views, profileViews, likes, comments, shares, revenue },
+          create: {
+            accountId: account.id,
+            date: finalDate,
+            views,
+            profileViews,
+            likes,
+            comments,
+            shares,
+            revenue,
+          }
+        });
+        importCount++;
+      } catch (rowError: any) {
+        lastError = rowError.message;
+      }
     }
 
     return NextResponse.json({ 
       success: true, 
-      message: `Bot sync completed: ${importCount} items for ${accountHandle}` 
+      message: `Bot sync completed: ${importCount} items for ${accountHandle}`,
+      lastError: lastError || null,
+      debug: data.length > 0 ? data[0] : "Empty file"
     });
 
   } catch (error: any) {
